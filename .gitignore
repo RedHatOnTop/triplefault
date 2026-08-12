@@ -2,3 +2,8 @@ build/
 logs/
 *.o
 *.elf
+
+# Running the harness byte-compiles it. Without this, `git add -A` sweeps the
+# cache into the commit, and a `git diff -- harness/` tampering check reports a
+# modification that is not one.
+__pycache__/
