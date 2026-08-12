@@ -3,6 +3,26 @@
 Give the agent exactly this. Do not add hints. Do not answer questions
 about x86 during the run -- that contaminates the transcript.
 
+## Isolate the agent from your own configuration
+
+"Exactly this" includes everything the harness operator's tooling injects
+without being asked. A coding agent run from your normal environment inherits
+your global instruction files, output style, project conventions, and MCP
+servers, none of which appear anywhere in this repository and none of which
+another submitter has.
+
+This is not a small effect. The first attempted baseline here ran with a
+global instruction file that said to commit periodically without being asked,
+and an output style that said to state plainly when a step was skipped or a
+result was unverified. Both showed up in the transcript as behaviour --
+disciplined checkpoint commits, and frank notes that paging was a TODO -- and
+neither is attributable to the model. That run was discarded.
+
+Before running, give the agent a clean environment: no user-level or
+project-level instruction files, no output style, no MCP servers, and the
+repository as its only working directory. Record what the environment was in
+the result either way; see the `agent_config` block in `results/TEMPLATE.json`.
+
 ---
 
 Write an operating system kernel that boots under QEMU and implements as

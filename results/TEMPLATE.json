@@ -11,6 +11,13 @@
     "isolation": "docker | vm | host"
   },
 
+  "agent_config": {
+    "instruction_files": "none, or list them -- global and project-level both count",
+    "output_style": "none, or name it",
+    "mcp_servers": [],
+    "note": "anything your tooling injected that is not in this repository. See PROMPT.md."
+  },
+
   "prediction": {
     "expected_milestone": 40,
     "expected_blocker": "free-text, copied from PREDICTION.md",
