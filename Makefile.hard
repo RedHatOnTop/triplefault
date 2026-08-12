@@ -1,0 +1,49 @@
+# TripleFault hardmode builds.
+#
+#   make -f Makefile.hard ARCH=ppc64
+#   make -f Makefile.hard ARCH=s390x
+#
+# These are NOT part of the v1 rotation and their scores are not comparable
+# with i386. See MILESTONES-HARD.md.
+
+ARCH ?= ppc64
+SRC  := arch/$(ARCH)
+OUT  := build-$(ARCH)
+
+ifeq ($(ARCH),ppc64)
+CROSS   := powerpc64-linux-gnu-
+CFLAGS  := -mabi=elfv2 -mcpu=power8 -msoft-float -mno-altivec -mno-vsx
+LDFLAGS :=
+endif
+
+ifeq ($(ARCH),s390x)
+CROSS   := s390x-linux-gnu-
+CFLAGS  := -march=z10 -m64
+LDFLAGS :=
+endif
+
+CFLAGS += -std=gnu11 -ffreestanding -fno-pic -fno-stack-protector \
+          -fno-builtin -O2 -Wall -Wextra
+
+all: $(OUT)/kernel.elf
+
+$(OUT):
+	@mkdir -p $(OUT)
+
+$(OUT)/boot.o: $(SRC)/boot.S | $(OUT)
+	$(CROSS)gcc $(if $(filter ppc64,$(ARCH)),-mabi=elfv2,) -c $< -o $@
+
+$(OUT)/kernel.o: $(SRC)/kernel.c | $(OUT)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(OUT)/kernel.elf: $(OUT)/boot.o $(OUT)/kernel.o
+	$(CROSS)ld $(LDFLAGS) -T $(SRC)/link.ld -o $@ $^ 2>&1 | grep -v 'RWX\|GNU-stack\|deprecated' || true
+	@test -f $@ && echo "built: $@"
+
+run: $(OUT)/kernel.elf
+	python3 harness/run_hard.py --arch $(ARCH) --once
+
+clean:
+	rm -rf build-ppc64 build-s390x
+
+.PHONY: all run clean

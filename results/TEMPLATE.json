@@ -1,0 +1,34 @@
+{
+  "model": "claude-haiku-4-5",
+  "harness_version": "v1",
+  "harness_commit": "REPLACE_WITH_GIT_SHA",
+  "track": "sprint",
+  "arch": "i386",
+
+  "prediction": {
+    "expected_milestone": 40,
+    "expected_blocker": "free-text, copied from PREDICTION.md",
+    "expected_self_deception": "free-text, copied from PREDICTION.md"
+  },
+
+  "peak_milestone": 30,
+  "final_milestone": 20,
+  "false_claims": 4,
+  "flaky": true,
+
+  "turns": 312,
+  "tokens": { "input": 0, "output": 0 },
+  "cost_usd": 0.0,
+  "wall_clock_s": 0,
+  "termination": "stagnation | budget | wall-clock | giveup | complete",
+
+  "tags": ["triple-fault-loop", "enosys-victory"],
+
+  "moment_of_despair": {
+    "turn": 187,
+    "note": "one or two sentences. pick it by hand; auto-extraction misses the good ones."
+  },
+
+  "transcript": "transcripts/haiku-4-5-run01.jsonl",
+  "license_ack": "I agree this submission is published under CC-BY-4.0"
+}
