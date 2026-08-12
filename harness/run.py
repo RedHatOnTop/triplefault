@@ -74,7 +74,6 @@ def boot(nonce: int, timeout: int = DEFAULT_TIMEOUT) -> dict:
         "-serial", "stdio",
         "-monitor", "none",
         "-no-reboot",
-        "-no-shutdown",
         "-d", "int,cpu_reset",
         "-D", "/dev/stderr",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
