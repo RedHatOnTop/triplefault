@@ -5,6 +5,12 @@
   "track": "sprint",
   "arch": "i386",
 
+  "environment": {
+    "qemu": "REPLACE_FROM_/etc/tf-versions",
+    "gcc": "REPLACE_FROM_/etc/tf-versions",
+    "isolation": "docker | vm | host"
+  },
+
   "prediction": {
     "expected_milestone": 40,
     "expected_blocker": "free-text, copied from PREDICTION.md",

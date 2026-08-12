@@ -91,6 +91,10 @@ your transcript. Requirements:
 3. **Tag the failure modes** from `docs/FAILURE_TAXONOMY.md`.
 4. **Fill in `moment_of_despair` by hand.** Automated extraction never finds
    the good ones.
+5. **Fill in the `environment` block.** The Docker image writes QEMU and gcc
+   versions to `/etc/tf-versions` for this; if you ran on the host, record them
+   yourself. M20 and above are checked partly against elapsed time, so a result
+   without the environment it ran in cannot be compared with one that has it.
 
 **Bad results are the point.** A run that dies at milestone 20 with a
 readable transcript is worth more to this repository than a run that reaches
