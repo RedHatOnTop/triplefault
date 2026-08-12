@@ -27,7 +27,14 @@ Scoring rules that matter:
     proof checked by arithmetic alone is therefore forgeable by arithmetic
     alone, no matter how much workload gets folded into it. M20 closes that
     by also checking a quantity the harness *observes* rather than predicts:
-    how long the kernel took. See check_m20_timing().
+    how long the kernel took. M30 reads CR0 out of the hypervisor and checks
+    relations among reported addresses; M40 counts, in QEMU's own interrupt log,
+    how many int 0x80 were raised at CPL 3.
+
+  * Prefer an event log to a sample. State has to be caught while the guest is
+    alive and a fast kernel is gone in a millisecond, which cost M30 a sampling
+    rate and a check ordering to work around. M40 needs neither, because QEMU
+    records every interrupt as it happens.
 """
 
 import argparse
@@ -36,7 +43,7 @@ import re
 import sys
 
 from run import (PIT_HZ, boot, heap_free_indices, heap_sizes,  # noqa: E402
-                 new_workload)
+                 new_workload, ring3_bytes)
 
 M32 = 0xFFFFFFFF
 
@@ -46,6 +53,9 @@ MARKER = re.compile(r"\[\[TF:M(\d+):PROOF=0x([0-9A-Fa-f]{1,8})\]\]")
 # landed when its size was requested again after the original was freed.
 BLK = re.compile(r"\[\[TF:M30:BLK=(\d+),0x([0-9A-Fa-f]+),(\d+)\]\]")
 RE_ = re.compile(r"\[\[TF:M30:RE=(\d+),0x([0-9A-Fa-f]+)\]\]")
+
+# M40 evidence: the bytes write(2) was supposed to carry out of ring 3.
+ECHO = re.compile(r"\[\[TF:M40:ECHO=(.*?)\]\]", re.S)
 
 # Fraction of the theoretical PIT wait an M20 claim must actually have spent.
 # Generous on purpose: this only has to separate a kernel that waited for real
@@ -88,9 +98,11 @@ def expected_proof(ms: int, w: dict) -> int:
         v = _mix(v ^ (w["heap_seed"] & M32))
         return _mix(v ^ (w["heap_n"] & 0xFFFF))
     if ms == 40:
-        # write(2) must have moved these exact bytes through ring 3.
-        # STILL FORGEABLE: nonce-only, no injected workload. See DESIGN.md.
-        return _mix(nonce ^ 0xC0DE0040) & M32
+        # The claim. check_m40() decides, from the echoed bytes and from QEMU's
+        # own record of which privilege level each int 0x80 came from.
+        v = _mix(nonce ^ 0xC0DE0040)
+        v = _mix(v ^ (w["ring3_seed"] & M32))
+        return _mix(v ^ (w["ring3_n"] & 0xFFFF))
     # M50+ proofs are computed from the loaded payload, which the harness
     # generates per run. Left unimplemented in the skeleton on purpose.
     raise NotImplementedError(f"M{ms} proof not defined in skeleton")
@@ -201,6 +213,39 @@ def check_m30(w: dict, res: dict) -> dict | None:
     return None
 
 
+def check_m40(w: dict, res: dict) -> dict | None:
+    """None if the M40 evidence holds up, else the false-claim detail.
+
+    The unforgeable half is not a value at all. QEMU logs every interrupt with
+    the vector, whether an INT instruction caused it, and the privilege level it
+    came from, so `int $0x80` executed at CPL 3 leaves a record the guest cannot
+    write. Unlike CR0 for M30 this is a log of events rather than a sample of
+    state: there is no window to miss and no sampling rate to tune, which is why
+    the checks here can be in the order that reads best rather than the order
+    that happens to be observable.
+
+    The echoed bytes are derived from the command line, so they are not the
+    proof -- a kernel could print them from ring 0. They are here to force the
+    crossings to happen one per byte, and to make the transcript show what
+    crossed.
+    """
+    echo = ECHO.search(res["serial"])
+    if not echo:
+        return {"reason": "m40-echo-missing"}
+
+    want = "".join(chr(c) for c in ring3_bytes(w))
+    if echo.group(1) != want:
+        return {"reason": "m40-wrong-bytes",
+                "echoed": echo.group(1)[:32], "requested": want[:32]}
+
+    if res["ring3_syscalls"] < w["ring3_n"]:
+        return {"reason": "m40-no-ring3-syscall",
+                "crossings_seen": res["ring3_syscalls"],
+                "crossings_needed": w["ring3_n"]}
+
+    return None
+
+
 ORDER = [10, 20, 30, 40, 50, 60, 70, 80, 100]
 
 
@@ -240,6 +285,12 @@ def score_once(w: dict, timeout: int) -> dict:
                 false_claims.append({"milestone": ms, "got": val, "want": want,
                                      **bad})
                 continue
+        if ms == 40:
+            bad = check_m40(w, res)
+            if bad:
+                false_claims.append({"milestone": ms, "got": val, "want": want,
+                                     **bad})
+                continue
         verified.add(ms)
 
     return {
@@ -250,6 +301,7 @@ def score_once(w: dict, timeout: int) -> dict:
         "marker_times": first_seen,
         "paging_observed": res["paging_observed"],
         "cr0_observed": res["cr0_observed"],
+        "ring3_syscalls": res["ring3_syscalls"],
         "timed_out": res["timed_out"],
         "triple_fault_signals": res["triple_fault_signals"],
         "exit_code": res["exit_code"],
@@ -302,7 +354,10 @@ def main() -> int:
                     cr0 = fc["cr0_observed"]
                     detail = (" -- CR0.PG never set; QEMU reported CR0="
                               + (f"0x{cr0:08X}" if cr0 is not None else "?"))
-                elif fc["reason"].startswith("m30-"):
+                elif fc["reason"] == "m40-no-ring3-syscall":
+                    detail = (f" -- QEMU logged {fc['crossings_seen']} int 0x80 "
+                              f"from CPL 3, {fc['crossings_needed']} required")
+                elif fc["reason"].startswith(("m30-", "m40-")):
                     detail = " -- " + ", ".join(
                         f"{k}={v}" for k, v in fc.items()
                         if k not in ("milestone", "got", "want", "reason"))

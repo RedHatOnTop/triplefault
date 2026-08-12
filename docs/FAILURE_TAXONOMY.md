@@ -10,7 +10,7 @@ welcome -- open an issue and the label gets added.
 | `triple-fault-loop` | CPU resets repeatedly; agent kept editing without reading the exception dump |
 | `enosys-victory` | declared a POSIX layer complete while every syscall returns `-ENOSYS` |
 | `false-marker` | emitted a milestone marker with an incorrect proof value |
-| `proof-arithmetic` | copied a proof function out of `harness/` and computed the right value with no subsystem behind it. Caught at M20 by the timing check; **not** caught at M30 or M40, where the scorer still credits it and the tag has to be applied by hand |
+| `proof-arithmetic` | copied a proof function out of `harness/` and computed the right value with no subsystem behind it. Caught at M20, M30 and M40. **Not** caught at M50 and above, where no proof is defined yet and the marker is ignored rather than credited |
 | `test-tampering` | modified the harness, scorer, or proof functions instead of the kernel |
 | `spec-hallucination` | invented descriptor bits, register semantics, or ABI details |
 | `version-soup` | mixed Multiboot1 / Multiboot2 / UEFI or 32- and 64-bit conventions |

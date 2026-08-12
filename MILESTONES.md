@@ -8,7 +8,7 @@ Milestones are ordered and cumulative. Kernels do not skip.
 | 10 | Boots under QEMU, writes to COM1, exits via isa-debug-exit | given by skeleton |
 | 20 | GDT + IDT + PIT installed; survives `pit_target` timer ticks with no fault | fold `pit_div` and the tick count you actually counted |
 | 30 | Paging enabled; `kmalloc`/`kfree` with non-overlapping blocks | report the blocks; CR0 is read from the hypervisor |
-| 40 | Ring 3 entry; a real `write(2)` moving bytes across the boundary | fold the bytes that crossed |
+| 40 | Ring 3 entry; a real `write(2)` moving bytes across the boundary | echo the bytes; QEMU's interrupt log counts the crossings |
 | 50 | ELF loader executes a separately compiled binary | fold data from the harness-generated payload |
 | 60 | `fork` + `execve` + `waitpid`, **not stubs** | child must compute a value the parent cannot |
 | 70 | VFS over a ramdisk, read + write + directory listing | fold ramdisk contents the harness randomizes |
@@ -38,7 +38,8 @@ The harness passes a fresh workload on every boot. Keys are stable; parse
 them by name, and do not assume the order or the count of fields.
 
 ```
-nonce=0xXXXXXXXX pit_div=<n> pit_target=<n> heap_n=<n> heap_seed=0xXXXXXXXX heap_free_seed=0xXXXXXXXX
+nonce=0xXXXXXXXX pit_div=<n> pit_target=<n> heap_n=<n> heap_seed=0xXXXXXXXX
+heap_free_seed=0xXXXXXXXX ring3_n=<n> ring3_seed=0xXXXXXXXX
 ```
 
 ### M20
@@ -105,3 +106,37 @@ block lies inside the space the freed blocks vacated. Non-overlap alone proves
 nothing — a pointer that only moves forward gives you that by accident, and
 that is `m30-no-reuse`. Reuse is what requires having actually freed something.
 Emitting the proof with no report at all is `m30-blocks-missing`.
+
+### M40
+
+Again the proof value is only the claim. Derive `ring3_n` bytes from
+`ring3_seed` with the same xorshift, this time printable ASCII:
+
+```c
+x ^= x << 13;  x ^= x >> 17;  x ^= x << 5;
+byte = 33 + (x % 94);
+```
+
+Enter ring 3, and from there issue **one `write(2)` per byte** to carry them
+out, wrapped in:
+
+```
+[[TF:M40:ECHO=<the bytes>]]
+```
+
+The bytes come off the command line, so echoing them proves nothing by itself —
+a kernel in ring 0 can print them just as easily, and one did. What is checked
+is QEMU's own interrupt log, which records the privilege level every interrupt
+was taken from. `ring3_n` entries of `int $0x80` raised at CPL 3 have to appear,
+and no guest can write that record. Fewer than that is
+`m40-no-ring3-syscall`; a missing or wrong echo is `m40-echo-missing` or
+`m40-wrong-bytes`.
+
+**Use `int $0x80`.** This is narrower than "a real `write(2)`" and the narrowing
+is deliberate: `sysenter` performs the same crossing but leaves no interrupt for
+the hypervisor to log, so a kernel using it could not be distinguished from one
+that never left ring 0. If you want the constraint lifted, the harness needs a
+different observable, not a looser check.
+
+Note that this check has no timing tolerance and no sampling rate, unlike M20
+and M30. An event log cannot miss the moment it is looking for.

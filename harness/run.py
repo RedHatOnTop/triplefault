@@ -99,6 +99,12 @@ def new_workload(nonce: int | None = None) -> dict:
         "heap_n": n,
         "heap_seed": random.getrandbits(32),
         "heap_free_seed": random.getrandbits(32),
+        # M40: how many separate write(2) calls to issue from ring 3, and the
+        # seed the bytes come from. The count is what the interrupt log is
+        # checked against, so it has to be large enough that a stray software
+        # interrupt cannot be mistaken for the workload.
+        "ring3_n": random.randrange(24, 65),
+        "ring3_seed": random.getrandbits(32),
     }
 
 
@@ -140,6 +146,22 @@ def heap_free_indices(w: dict) -> list[int]:
     return out
 
 
+def ring3_bytes(w: dict) -> list[int]:
+    """The bytes write(2) has to carry out of ring 3, in order.
+
+    Same xorshift as the heap sizes. Restricted to printable ASCII so the echo
+    is readable in a transcript rather than being a run of control characters.
+    """
+    x = w["ring3_seed"] & 0xFFFFFFFF
+    out = []
+    for _ in range(w["ring3_n"]):
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        out.append(33 + (x % 94))
+    return out
+
+
 def cmdline_for(w: dict) -> str:
     """Kernel command line. Keys are stable; parse them, do not count fields."""
     return (f"nonce=0x{w['nonce']:08X}"
@@ -147,11 +169,22 @@ def cmdline_for(w: dict) -> str:
             f" pit_target={w['pit_target']}"
             f" heap_n={w['heap_n']}"
             f" heap_seed=0x{w['heap_seed']:08X}"
-            f" heap_free_seed=0x{w['heap_free_seed']:08X}")
+            f" heap_free_seed=0x{w['heap_free_seed']:08X}"
+            f" ring3_n={w['ring3_n']}"
+            f" ring3_seed=0x{w['ring3_seed']:08X}")
 
 
 CR0_RE = re.compile(r"CR0=([0-9a-fA-F]{8}).*?CR3=([0-9a-fA-F]{8})", re.S)
 CR0_PG = 1 << 31
+
+# Every interrupt QEMU takes is logged with the vector, whether it came from an
+# INT instruction, and the privilege level it was taken FROM:
+#   151: v=80 e=0000 i=1 cpl=3 IP=001b:00101234 ...
+# A guest cannot produce that line without executing int $0x80 at CPL 3. This is
+# a log of events rather than a sample of state, so unlike CR0 there is no window
+# to miss -- which is why M40 uses it and M30 could not.
+SYSCALL_INT = re.compile(r"^\s*\d+:\s*v=80\s+e=[0-9a-fA-F]+\s+i=1\s+cpl=3\b",
+                         re.M)
 
 
 class _Qmp:
@@ -232,6 +265,7 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
             "paging_observed": False,
             "cr0_observed": None,
             "cr3_observed": None,
+            "ring3_syscalls": 0,
             "workload": w,
             "wall_s": 0.0,
         }
@@ -347,6 +381,7 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         # agent cannot mistake it for "the kernel is just quiet".
         debug = pathlib.Path(debug_path).read_text(errors="replace")
         resets = debug.count("Triple fault") + debug.count("check_exception old")
+        ring3_syscalls = len(SYSCALL_INT.findall(debug))
         tail = debug.splitlines(keepends=True)[-DEBUG_TAIL_LINES:]
         qmp.close()
     finally:
@@ -363,6 +398,7 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         "paging_observed": paging_seen,
         "cr0_observed": cr0_seen,
         "cr3_observed": cr3_seen,
+        "ring3_syscalls": ring3_syscalls,
         "exit_code": rc,
         "timed_out": timed_out,
         "triple_fault_signals": resets,
