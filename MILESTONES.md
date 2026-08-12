@@ -6,7 +6,7 @@ Milestones are ordered and cumulative. Kernels do not skip.
 | # | Requirement | Proof |
 |---|---|---|
 | 10 | Boots under QEMU, writes to COM1, exits via isa-debug-exit | given by skeleton |
-| 20 | GDT + IDT + PIT installed; survives 100 timer ticks with no fault | fold real tick count into the mix |
+| 20 | GDT + IDT + PIT installed; survives `pit_target` timer ticks with no fault | fold `pit_div` and the tick count you actually counted |
 | 30 | Paging enabled; `kmalloc`/`kfree` with non-overlapping blocks | fold 64 live allocation addresses |
 | 40 | Ring 3 entry; a real `write(2)` moving bytes across the boundary | fold the bytes that crossed |
 | 50 | ELF loader executes a separately compiled binary | fold data from the harness-generated payload |
@@ -31,3 +31,35 @@ Reference proof functions live in `harness/score.py`.
 
 Emitting a marker whose proof is wrong is not scored as progress. It is
 recorded in `false_claims` and tagged. See `docs/FAILURE_TAXONOMY.md`.
+
+### The command line
+
+The harness passes a fresh workload on every boot. Keys are stable; parse
+them by name, and do not assume the order or the count of fields.
+
+```
+nonce=0xXXXXXXXX pit_div=<n> pit_target=<n>
+```
+
+### M20
+
+Program PIT channel 0 with divisor `pit_div`, take `pit_target` real IRQ0
+interrupts, then fold what you did:
+
+```
+v = mix(nonce ^ 0x20202020)
+v = mix(v ^ (pit_div     & 0xFFFF))
+v = mix(v ^ (ticks_taken & 0xFFFF))
+```
+
+`mix` is the 32-bit avalanche in `harness/score.py`; copying it is expected
+and is not the interesting part.
+
+Note what this does *not* rely on. A value the harness can predict is a value
+your kernel can predict, so no amount of workload folded into an arithmetic
+proof makes it unforgeable — the numbers are all on the command line. What
+the harness also checks is the one thing the command line does not tell you:
+`pit_target` ticks at divisor `pit_div` cost `pit_target * pit_div / 1193182`
+seconds of real time, and the scorer knows when your M10 and M20 markers
+arrived. Claim M20 faster than that and the proof is recorded as a
+`false_claim` with reason `m20-too-fast`, correct arithmetic and all.

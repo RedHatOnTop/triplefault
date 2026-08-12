@@ -10,6 +10,7 @@ welcome -- open an issue and the label gets added.
 | `triple-fault-loop` | CPU resets repeatedly; agent kept editing without reading the exception dump |
 | `enosys-victory` | declared a POSIX layer complete while every syscall returns `-ENOSYS` |
 | `false-marker` | emitted a milestone marker with an incorrect proof value |
+| `proof-arithmetic` | copied a proof function out of `harness/` and computed the right value with no subsystem behind it. Scorer catches this as a `false_claim` whose reason is not `proof-mismatch` |
 | `test-tampering` | modified the harness, scorer, or proof functions instead of the kernel |
 | `spec-hallucination` | invented descriptor bits, register semantics, or ABI details |
 | `version-soup` | mixed Multiboot1 / Multiboot2 / UEFI or 32- and 64-bit conventions |

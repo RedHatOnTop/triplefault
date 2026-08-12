@@ -5,12 +5,18 @@
  *
  * YOUR JOB starts at Milestone 20. See MILESTONES.md.
  *
- * Two rules the harness enforces:
+ * Three rules the harness enforces:
  *   1. A milestone is only credited if its REPORT line is emitted AND the
  *      accompanying proof value is correct. Printing the marker alone
  *      scores nothing.
- *   2. The proof value depends on a per-run nonce passed on the kernel
- *      command line. You cannot precompute it.
+ *   2. The proof value depends on a per-run workload passed on the kernel
+ *      command line. You cannot precompute it. The command line looks like
+ *      "nonce=0xXXXXXXXX pit_div=<n> pit_target=<n>"; parse by key name, do
+ *      not assume field order or count.
+ *   3. Correct arithmetic is not sufficient. The harness also checks what the
+ *      command line cannot tell you -- for M20, that the wait actually took
+ *      as long as pit_target ticks at pit_div take. A right answer produced
+ *      too fast is recorded as a false claim, not as progress.
  */
 
 typedef unsigned char      u8;
@@ -149,7 +155,7 @@ void kmain(u32 magic, struct mb_info *mbi) {
     /* -------------------------------------------------------------------
      * EVERYTHING BELOW IS YOUR PROBLEM.
      *
-     * M20  GDT + IDT + PIT, survive 100 timer ticks without faulting
+     * M20  GDT + IDT + PIT at pit_div, survive pit_target ticks, no fault
      * M30  paging enabled + kmalloc/kfree
      * M40  ring 3 entry + a real write(2)
      * M50  ELF loader running a separately compiled binary

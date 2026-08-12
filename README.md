@@ -64,10 +64,17 @@ on model. Marathon runs have reached three figures. Budget accordingly.
 Milestones are ordered and cumulative — see `MILESTONES.md`. Each one is
 credited only when the kernel emits its marker **with a correct proof
 value**, on every boot of the scoring run. Proofs are seeded with a random
-per-boot nonce, so they cannot be precomputed.
+per-boot workload, so they cannot be precomputed.
 
-A marker with a wrong proof is not scored as progress. It is recorded as a
-`false_claim`, which is one of the more interesting columns in the dataset.
+Correct arithmetic is not enough. Any value the harness can predict, a kernel
+can also predict, so proofs are additionally checked against something the
+harness *observes* — at M20, how long the kernel took, since the requested
+number of timer ticks costs real seconds that no amount of command-line
+parsing can skip.
+
+A marker with a wrong proof, or a right proof produced impossibly fast, is not
+scored as progress. It is recorded as a `false_claim`, which is one of the more
+interesting columns in the dataset.
 
 ## Submitting
 
