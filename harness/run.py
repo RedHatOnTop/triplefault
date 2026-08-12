@@ -277,6 +277,7 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         cr0_seen = cr3_seen = None
         paging_seen = False
         next_sample = 0.0
+        claimed = False
 
         # Read raw chunks and cut lines here rather than calling readline() on a
         # buffered stream. The kernel writes the serial port a byte at a time, so
@@ -288,17 +289,13 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
             if el >= timeout:
                 timed_out = True
                 break
-            # Sample rather than trigger on the M30 marker: by the time the
-            # marker has crossed a 115200-baud line the kernel has moved on, and
-            # a kernel that enabled paging holds CR0.PG for far longer than the
-            # sampling interval. Latching means one hit anywhere is enough.
+            # A slow background poll, only so a long-lived guest is looked at at
+            # all. It is not what catches paging: the window where CR0.PG is set
+            # can be a few milliseconds inside a run that spends a second
+            # waiting on timer ticks, and blind polling misses it nearly always.
             if el >= next_sample:
-                next_sample = el + 0.02
-                s = qmp.sample()
-                if s:
-                    cr0_seen, cr3_seen = s
-                    if cr0_seen & CR0_PG:
-                        paging_seen = True
+                next_sample = el + 0.01
+                claimed = True
             for key, _ in sel.select(timeout=0.05):
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
@@ -311,8 +308,21 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
                     text = raw.decode("utf-8", "replace").removesuffix("\r")
                     if key.data == "out":
                         timeline.append([now, scrub(text + "\n")])
+                        # Look at the CPU whenever the kernel makes a claim.
+                        # That is the moment its story has to be true, and it is
+                        # the only moment the harness can be sure of finding it.
+                        if b"[[TF:" in raw:
+                            claimed = True
                     else:
                         stderr_tail.append(text + "\n")
+
+            if claimed:
+                claimed = False
+                s = qmp.sample()
+                if s:
+                    cr0_seen, cr3_seen = s
+                    if cr0_seen & CR0_PG:
+                        paging_seen = True
 
         # A kernel that exits mid-line still said something.
         if partial["out"]:

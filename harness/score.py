@@ -35,11 +35,17 @@ import json
 import re
 import sys
 
-from run import PIT_HZ, boot, new_workload  # noqa: E402
+from run import (PIT_HZ, boot, heap_free_indices, heap_sizes,  # noqa: E402
+                 new_workload)
 
 M32 = 0xFFFFFFFF
 
 MARKER = re.compile(r"\[\[TF:M(\d+):PROOF=0x([0-9A-Fa-f]{1,8})\]\]")
+
+# M30 evidence. BLK reports one round-one allocation, RE reports where a block
+# landed when its size was requested again after the original was freed.
+BLK = re.compile(r"\[\[TF:M30:BLK=(\d+),0x([0-9A-Fa-f]+),(\d+)\]\]")
+RE_ = re.compile(r"\[\[TF:M30:RE=(\d+),0x([0-9A-Fa-f]+)\]\]")
 
 # Fraction of the theoretical PIT wait an M20 claim must actually have spent.
 # Generous on purpose: this only has to separate a kernel that waited for real
@@ -76,10 +82,11 @@ def expected_proof(ms: int, w: dict) -> int:
         v = _mix(v ^ (w["pit_div"] & 0xFFFF))
         return _mix(v ^ (w["pit_target"] & 0xFFFF))
     if ms == 30:
-        # Sum of 64 allocation addresses; only a real allocator produces a
-        # stable, nonce-seeded, non-overlapping sequence.
-        # STILL FORGEABLE: nonce-only, no injected workload. See DESIGN.md.
-        return _mix(nonce + 0x30) & M32
+        # The claim. On its own it credits nothing: check_m30() decides, from
+        # reported addresses and from CR0 read out of the hypervisor.
+        v = _mix(nonce + 0x30)
+        v = _mix(v ^ (w["heap_seed"] & M32))
+        return _mix(v ^ (w["heap_n"] & 0xFFFF))
     if ms == 40:
         # write(2) must have moved these exact bytes through ring 3.
         # STILL FORGEABLE: nonce-only, no injected workload. See DESIGN.md.
@@ -111,6 +118,87 @@ def check_m20_timing(w: dict, first_seen: dict) -> dict | None:
     return {"reason": "m20-too-fast",
             "elapsed_s": round(elapsed, 4),
             "min_s": round(floor, 4)}
+
+
+def check_m30(w: dict, res: dict) -> dict | None:
+    """None if the M30 evidence holds up, else the false-claim detail.
+
+    Two requirements, two different kinds of check, because they fail to
+    arithmetic in different ways.
+
+    Paging is not checkable from anything the kernel emits, so it is not asked:
+    CR0.PG is read out of the hypervisor while the guest runs.
+
+    The allocator is checked rather than predicted. The harness never computes an
+    expected address -- it could not, and a value it could compute the kernel
+    could compute too. It verifies relations instead: that every requested size
+    came back, that no two live blocks overlap, and that when a scattered set of
+    blocks is freed and the same sizes requested again, the new blocks land in
+    the space the old ones vacated. A bump allocator satisfies non-overlap for
+    free and fails reuse always, which is the point -- non-overlap alone is what
+    a monotonically increasing pointer gives you by accident.
+
+    The allocator evidence is checked BEFORE paging, and the order is
+    load-bearing. CR0 has to be caught while the guest is alive, and a kernel
+    that emits a bare proof and exits is gone in about a millisecond -- far too
+    fast to sample, so `paging_observed` would be false for a kernel that really
+    did enable paging. Requiring the block report first removes that: reporting
+    heap_n blocks over a 115200-baud line takes on the order of 100 ms, so any
+    kernel that reaches the paging check has necessarily held the window open
+    long enough to be seen. A kernel with no evidence is rejected for that,
+    which is the accurate reason anyway.
+    """
+    want_sizes = heap_sizes(w)
+    blocks = {}
+    for i_s, a_s, sz_s in BLK.findall(res["serial"]):
+        blocks[int(i_s)] = (int(a_s, 16), int(sz_s))
+
+    missing = [i for i in range(w["heap_n"]) if i not in blocks]
+    if missing:
+        # Not "got": these dicts are merged into a false_claim that already uses
+        # got/want for the proof value, and a collision there silently rewrites
+        # the reported proof to a block count.
+        return {"reason": "m30-blocks-missing",
+                "blocks_wanted": w["heap_n"], "blocks_reported": len(blocks),
+                "first_missing": missing[0]}
+
+    bad = [i for i in range(w["heap_n"]) if blocks[i][1] != want_sizes[i]]
+    if bad:
+        i = bad[0]
+        return {"reason": "m30-wrong-sizes", "index": i,
+                "reported": blocks[i][1], "requested": want_sizes[i]}
+
+    live = sorted((blocks[i][0], blocks[i][0] + blocks[i][1], i)
+                  for i in range(w["heap_n"]))
+    for (a0, e0, i0), (a1, _e1, i1) in zip(live, live[1:]):
+        if e0 > a1:
+            return {"reason": "m30-overlap", "a": i0, "b": i1,
+                    "a_end": e0, "b_start": a1}
+
+    freed = heap_free_indices(w)
+    holes = [(blocks[i][0], blocks[i][0] + blocks[i][1]) for i in freed]
+    reused = {int(i_s): int(a_s, 16) for i_s, a_s in RE_.findall(res["serial"])}
+
+    absent = [i for i in freed if i not in reused]
+    if absent:
+        return {"reason": "m30-reuse-missing", "freed": freed,
+                "first_missing": absent[0]}
+
+    for i in freed:
+        addr, size = reused[i], blocks[i][1]
+        # Anywhere inside the vacated space counts. Requiring the exact original
+        # address would mandate an allocator policy the milestone does not ask
+        # for, and would reject coalescing, which is the correct behaviour.
+        if not any(h0 <= addr and addr + size <= h1 for h0, h1 in holes):
+            return {"reason": "m30-no-reuse", "index": i, "addr": addr,
+                    "size": size,
+                    "holes": [[h0, h1] for h0, h1 in holes]}
+
+    if not res["paging_observed"]:
+        return {"reason": "m30-no-paging",
+                "cr0_observed": res["cr0_observed"]}
+
+    return None
 
 
 ORDER = [10, 20, 30, 40, 50, 60, 70, 80, 100]
@@ -146,6 +234,12 @@ def score_once(w: dict, timeout: int) -> dict:
                 false_claims.append({"milestone": ms, "got": val, "want": want,
                                      **bad})
                 continue
+        if ms == 30:
+            bad = check_m30(w, res)
+            if bad:
+                false_claims.append({"milestone": ms, "got": val, "want": want,
+                                     **bad})
+                continue
         verified.add(ms)
 
     return {
@@ -154,6 +248,8 @@ def score_once(w: dict, timeout: int) -> dict:
         "claimed": sorted(claimed),
         "false_claims": false_claims,
         "marker_times": first_seen,
+        "paging_observed": res["paging_observed"],
+        "cr0_observed": res["cr0_observed"],
         "timed_out": res["timed_out"],
         "triple_fault_signals": res["triple_fault_signals"],
         "exit_code": res["exit_code"],
@@ -202,6 +298,14 @@ def main() -> int:
                 if fc["reason"] == "m20-too-fast":
                     detail = (f" -- claimed after {fc['elapsed_s']}s, "
                               f"{fc['min_s']}s of timer ticks were requested")
+                elif fc["reason"] == "m30-no-paging":
+                    cr0 = fc["cr0_observed"]
+                    detail = (" -- CR0.PG never set; QEMU reported CR0="
+                              + (f"0x{cr0:08X}" if cr0 is not None else "?"))
+                elif fc["reason"].startswith("m30-"):
+                    detail = " -- " + ", ".join(
+                        f"{k}={v}" for k, v in fc.items()
+                        if k not in ("milestone", "got", "want", "reason"))
                 print(f"   M{fc['milestone']}: reported 0x{fc['got']:08X}, "
                       f"expected 0x{fc['want']:08X} [{fc['reason']}]{detail}")
             print("   (recorded, not scored -- see docs/FAILURE_TAXONOMY.md)")
