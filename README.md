@@ -96,6 +96,16 @@ your transcript. Requirements:
    yourself. M20 and above are checked partly against elapsed time, so a result
    without the environment it ran in cannot be compared with one that has it.
 
+### Reading a single result
+
+Record `model_released` and `model_class`, and read other people's rows with
+both in view. A milestone number attached to a small model from a year ago says
+almost nothing about what a current frontier model does, and the first baseline
+collected here was exactly that: a lightweight model ten months old, one run,
+which reached milestone 30. It is a datapoint about the harness, not a ceiling
+for anything. Sorting the table by milestone and reading the top row is the
+misuse this project is most likely to suffer.
+
 **Bad results are the point.** A run that dies at milestone 20 with a
 readable transcript is worth more to this repository than a run that reaches
 60 without one. Please do not withhold embarrassing runs — and please write

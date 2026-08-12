@@ -1,5 +1,7 @@
 {
-  "model": "claude-haiku-4-5",
+  "model": "claude-haiku-4-5-20251001",
+  "model_released": "2025-10-01",
+  "model_class": "small | mid | frontier -- at the time the run happened",
   "harness_version": "v1",
   "harness_commit": "REPLACE_WITH_GIT_SHA",
   "track": "sprint",
