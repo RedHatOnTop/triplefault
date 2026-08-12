@@ -24,6 +24,7 @@ import pathlib
 import random
 import re
 import selectors
+import socket
 import subprocess
 import sys
 import tempfile
@@ -86,18 +87,134 @@ def new_workload(nonce: int | None = None) -> dict:
     # enough that a three-boot scoring run stays interactive.
     lo = int(0.6 * PIT_HZ / target)
     hi = int(1.2 * PIT_HZ / target)
+    n = random.randrange(24, 49)
     return {
         "nonce": random.getrandbits(32) if nonce is None else nonce,
         "pit_div": random.randrange(lo, hi + 1),
         "pit_target": target,
+        # M30: how many blocks to allocate, the seed their sizes come from, and
+        # which of them to free before the second round. The sizes are derived
+        # rather than listed so the command line stays short; see MILESTONES.md
+        # for the derivation the kernel has to reproduce.
+        "heap_n": n,
+        "heap_seed": random.getrandbits(32),
+        "heap_free_seed": random.getrandbits(32),
     }
+
+
+def heap_sizes(w: dict) -> list[int]:
+    """The allocation sizes the kernel is required to request, in order.
+
+    Derived from heap_seed by a 32-bit xorshift so the kernel can reproduce it
+    with a few lines of C. Sizes are 16-byte multiples in [16, 1024].
+    """
+    x = w["heap_seed"] & 0xFFFFFFFF
+    out = []
+    for _ in range(w["heap_n"]):
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        out.append(16 * (1 + (x % 64)))
+    return out
+
+
+def heap_free_indices(w: dict) -> list[int]:
+    """Which round-one blocks to free, as indices into heap_sizes().
+
+    Every fourth block by the same xorshift, which scatters the holes instead
+    of freeing a contiguous run -- a bump allocator that only ever moves
+    forward cannot satisfy the reuse check either way, but scattered holes also
+    rule out simply rewinding the bump pointer.
+    """
+    x = w["heap_free_seed"] & 0xFFFFFFFF
+    n = w["heap_n"]
+    picked, out = set(), []
+    while len(out) < max(3, n // 6):
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        i = x % n
+        if i not in picked:
+            picked.add(i)
+            out.append(i)
+    return out
 
 
 def cmdline_for(w: dict) -> str:
     """Kernel command line. Keys are stable; parse them, do not count fields."""
     return (f"nonce=0x{w['nonce']:08X}"
             f" pit_div={w['pit_div']}"
-            f" pit_target={w['pit_target']}")
+            f" pit_target={w['pit_target']}"
+            f" heap_n={w['heap_n']}"
+            f" heap_seed=0x{w['heap_seed']:08X}"
+            f" heap_free_seed=0x{w['heap_free_seed']:08X}")
+
+
+CR0_RE = re.compile(r"CR0=([0-9a-fA-F]{8}).*?CR3=([0-9a-fA-F]{8})", re.S)
+CR0_PG = 1 << 31
+
+
+class _Qmp:
+    """Minimal QMP client, used only to sample control registers.
+
+    Best-effort by construction: a kernel that exits in 100 ms may be gone
+    before the socket is even connectable, and that is a legitimate outcome, not
+    an error. Failure to sample means paging was not observed, which is exactly
+    what should be reported for a kernel that never enabled it.
+    """
+
+    def __init__(self, path: str, deadline: float):
+        self.f = None
+        self.sock = None
+        while time.monotonic() < deadline:
+            try:
+                s = socket.socket(socket.AF_UNIX)
+                s.settimeout(0.5)
+                s.connect(path)
+            except OSError:
+                time.sleep(0.01)
+                continue
+            try:
+                f = s.makefile("rwb")
+                f.readline()                        # greeting
+                f.write(b'{"execute":"qmp_capabilities"}\n')
+                f.flush()
+                f.readline()
+            except OSError:
+                s.close()
+                return
+            self.sock, self.f = s, f
+            return
+
+    def sample(self) -> tuple[int, int] | None:
+        """(CR0, CR3) as QEMU sees them right now, or None."""
+        if not self.f:
+            return None
+        try:
+            self.f.write(b'{"execute":"human-monitor-command",'
+                         b'"arguments":{"command-line":"info registers"}}\n')
+            self.f.flush()
+            while True:
+                line = self.f.readline()
+                if not line:
+                    return None
+                d = json.loads(line)
+                if "error" in d:
+                    return None
+                if "return" in d:
+                    m = CR0_RE.search(d["return"] or "")
+                    return (int(m.group(1), 16), int(m.group(2), 16)) if m else None
+        except (OSError, ValueError):
+            self.f = None
+            return None
+
+    def close(self):
+        for h in (self.f, self.sock):
+            try:
+                if h:
+                    h.close()
+            except OSError:
+                pass
 
 
 def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
@@ -112,12 +229,16 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
             "exit_code": None,
             "timed_out": False,
             "triple_fault_signals": 0,
+            "paging_observed": False,
+            "cr0_observed": None,
+            "cr3_observed": None,
             "workload": w,
             "wall_s": 0.0,
         }
 
     fd, debug_path = tempfile.mkstemp(prefix="tf-qemu-", suffix=".log")
     os.close(fd)
+    qmp_path = debug_path + ".qmp"
 
     cmd = [
         QEMU,
@@ -130,6 +251,11 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         "-no-reboot",
         "-d", "int,cpu_reset",
         "-D", debug_path,
+        # Paging cannot be proved by anything the kernel says: whatever value it
+        # derives, the harness could derive too, so it is forgeable arithmetic.
+        # CR0 read out of the hypervisor is not -- a guest cannot lie to QEMU
+        # about its own control registers.
+        "-qmp", f"unix:{qmp_path},server,nowait",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]
 
@@ -147,15 +273,32 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         partial = {"out": b"", "err": b""}
         timed_out = False
 
+        qmp = _Qmp(qmp_path, t0 + min(2.0, timeout))
+        cr0_seen = cr3_seen = None
+        paging_seen = False
+        next_sample = 0.0
+
         # Read raw chunks and cut lines here rather than calling readline() on a
         # buffered stream. The kernel writes the serial port a byte at a time, so
         # a line is nearly always incomplete when the fd reports ready; blocking
         # for the rest of it stalls the reader and backdates nothing -- it
         # postdates every line that was already waiting.
         while sel.get_map():
-            if time.monotonic() - t0 >= timeout:
+            el = time.monotonic() - t0
+            if el >= timeout:
                 timed_out = True
                 break
+            # Sample rather than trigger on the M30 marker: by the time the
+            # marker has crossed a 115200-baud line the kernel has moved on, and
+            # a kernel that enabled paging holds CR0.PG for far longer than the
+            # sampling interval. Latching means one hit anywhere is enough.
+            if el >= next_sample:
+                next_sample = el + 0.02
+                s = qmp.sample()
+                if s:
+                    cr0_seen, cr3_seen = s
+                    if cr0_seen & CR0_PG:
+                        paging_seen = True
             for key, _ in sel.select(timeout=0.05):
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
@@ -195,8 +338,11 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         debug = pathlib.Path(debug_path).read_text(errors="replace")
         resets = debug.count("Triple fault") + debug.count("check_exception old")
         tail = debug.splitlines(keepends=True)[-DEBUG_TAIL_LINES:]
+        qmp.close()
     finally:
         os.unlink(debug_path)
+        if os.path.exists(qmp_path):
+            os.unlink(qmp_path)
 
     return {
         "ok": rc == EXIT_OK_CODE,
@@ -204,6 +350,9 @@ def boot(w: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         "timeline": timeline,
         "qemu_debug_tail": scrub("".join(tail)),
         "qemu_stderr": scrub("".join(stderr_tail)),
+        "paging_observed": paging_seen,
+        "cr0_observed": cr0_seen,
+        "cr3_observed": cr3_seen,
         "exit_code": rc,
         "timed_out": timed_out,
         "triple_fault_signals": resets,
