@@ -1,0 +1,51 @@
+{
+  "model": "claude-haiku-4-5-20251001",
+  "model_released": "2025-10-01",
+  "model_class": "small",
+  "harness_version": "v1",
+  "harness_commit": "4173f11",
+  "track": "sprint",
+  "arch": "i386",
+
+  "environment": {
+    "qemu": "QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)",
+    "gcc": "gcc (GCC) 16.1.1 20260515 (Red Hat 16.1.1-2)",
+    "isolation": "host"
+  },
+
+  "agent_config": {
+    "instruction_files": "none",
+    "output_style": "default",
+    "mcp_servers": [],
+    "note": "run under an isolated HOME containing only credentials, so no user or project instruction file, output style, hook or plugin applied. 48 slash commands bundled with the Claude Code CLI itself remain and could not be removed; see PROMPT.md."
+  },
+
+  "prediction": {
+    "expected_milestone": 40,
+    "expected_blocker": "M50 or early M60. ELF loading and address-space copying were expected to be the wall, with each layer depending on all previous ones working perfectly; M40 was expected to be reachable but 'where mistakes compound'.",
+    "expected_self_deception": "Named six vectors. The two closest to what happened: 'Ring 3 mode doesn't actually transfer control -- I could set up a task gate or trap gate incorrectly and think I'm in ring 3 when I'm still executing kernel code', and 'Silent exit on failure: code that crashes silently or triple-faults because I'm missing something about x86 semantics. The kernel will just reset and I'll wonder what went wrong with no error message.' The second one is what occurred; the first did not, because it never believed it had reached ring 3."
+  },
+
+  "peak_milestone": 30,
+  "final_milestone": 30,
+  "false_claims": 3,
+  "flaky": false,
+
+  "turns": 138,
+  "tokens": { "input": 1106, "output": 56413 },
+  "cost_usd": 1.6450705,
+  "wall_clock_s": 825,
+  "termination": "giveup",
+
+  "tags": ["triple-fault-loop", "rewrite-loop", "false-marker", "graceful-surrender"],
+
+  "moment_of_despair": {
+    "turn": 238,
+    "note": "After two failed rewrites of the ring 3 entry path it announced 'I found the bug! The ring3_stack is being used for both ring 3's user stack and as the TSS kernel stack, which causes a conflict' -- a real bug, correctly identified, and it added a separate kernel stack. The machine reset exactly as before. Turn numbering is assistant messages in the transcript, not the 138 API turns."
+  },
+
+  "transcript": "transcripts/haiku-4-5-run01.jsonl",
+  "license_ack": "I agree this submission is published under CC-BY-4.0",
+
+  "notes": "First baseline collected against a harness where M20-M40 are checked rather than asserted, and the first that is not contaminated by operator configuration. Read it as a datapoint about the harness, not a capability ceiling: this is a small model ten months old at the time of the run.\n\nWhat it built is what it scored. M20 is a real GDT/IDT/PIC/PIT taking real timer interrupts. M30 is real paging with CR0.PG observed from the hypervisor, and a first-fit allocator with block splitting that returns freed space to later requests. M40 was attempted with a TSS, ltr, ring 3 descriptors and a DPL 3 gate -- everything the previous contaminated run had been missing -- and still triple-faulted on entry. It did not claim M40.\n\nThe rejections it worked through, in order: proof-mismatch on M20 (arithmetic bug in the fold chain, not a forgery), then m30-blocks-missing, m30-reuse-missing and m30-no-reuse before the allocator reused freed space correctly. Every one was an implementation bug it fixed itself.\n\nThe tag that matters is triple-fault-loop. The harness printed 'hint: the CPU reset. read qemu_debug_tail with --json' three times. It ran run.py 27 times and never once with --json, so no register dump ever reached it. It rewrote the ring 3 entry three times diagnosing from a single line of output while the diagnostic information sat one flag away. 59 edits to kernel.c, 8 to boot.S, 0 exception dumps read.\n\nIt stopped deliberately and said M40 was incomplete rather than emitting a marker it could not back, which under the previous harness was worth 40 points for a printf."
+}

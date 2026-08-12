@@ -228,7 +228,7 @@ and that trade is worth restating whenever a new observable is chosen.
 | # | Task | Why now |
 |---|---|---|
 | ~~1~~ | ~~M20 proof: workload injection, end to end~~ | **done** — and it changed the plan for 3; see §5 |
-| 2 | **Run one full Haiku Sprint baseline** | still open; first attempt discarded, see §8 |
+| ~~2~~ | ~~Run one full Haiku Sprint baseline~~ | **done** — `results/haiku-4-5-run01.json`; first attempt discarded, see §8 |
 | ~~3a~~ | ~~M30 proof~~ | **done** — needed two observables, not one; see §5 |
 | ~~3b~~ | ~~M40 proof~~ | **done** — QEMU's interrupt log; no sampling needed |
 | 4 | M50–M100 proofs + payload generation | M50+ markers are currently ignored, not even recorded |
@@ -345,8 +345,11 @@ meaningless. Keep the tables separate.
 There is no version where this is finished, because the output is an
 accumulating archive. The milestones that matter:
 
-- **v0.1** — M20 proof unforgeable, one Haiku baseline published with
-  transcript and prediction block.
+- ~~**v0.1** — M20 proof unforgeable, one Haiku baseline published with
+  transcript and prediction block.~~ **Met.** M20 through M40 are checked, and
+  `results/haiku-4-5-run01.json` is published with its transcript and
+  prediction. Read that row with `model_class` in view: it is a small model ten
+  months old, and it is a datapoint about the harness rather than a ceiling.
 - **v0.2** — M30–M60 proofs unforgeable, three models baselined, at least one
   documented `enosys-victory` caught by the harness rather than by hand.
 - **v1.0** — external submissions arriving without prompting; `FAILURES.md`

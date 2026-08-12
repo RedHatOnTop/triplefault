@@ -45,5 +45,7 @@
   },
 
   "transcript": "transcripts/haiku-4-5-run01.jsonl",
-  "license_ack": "I agree this submission is published under CC-BY-4.0"
+  "license_ack": "I agree this submission is published under CC-BY-4.0",
+
+  "notes": "free-text. What was actually built versus what scored, which rejections the run worked through, and anything a reader would otherwise have to reconstruct from the transcript."
 }
